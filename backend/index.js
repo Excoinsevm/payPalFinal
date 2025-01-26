@@ -1,10 +1,16 @@
 const express = require("express");
-const Moralis = require("moralis").default;
+const { ethers } = require("ethers");
 const app = express();
 const cors = require("cors");
 require("dotenv").config();
-const port = 3001;
 const ABI = require("./abi.json");
+
+const port = 3001;
+
+// Initialize the provider and the contract
+const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
+const contractAddress = process.env.SMART_CONTRACT_ADDRESS;
+const contract = new ethers.Contract(contractAddress, ABI, provider);
 
 app.use(cors());
 app.use(express.json());
@@ -15,7 +21,7 @@ function convertArrayToObjects(arr) {
     type: transaction[0],
     amount: transaction[1],
     message: transaction[2],
-    address: `${transaction[3].slice(0,4)}...${transaction[3].slice(0,4)}`,
+    address: `${transaction[3].slice(0, 4)}...${transaction[3].slice(-4)}`,
     subject: transaction[4],
   }));
 
@@ -23,72 +29,47 @@ function convertArrayToObjects(arr) {
 }
 
 app.get("/getNameAndBalance", async (req, res) => {
-  const { userAddress } = req.query;
+  try {
+    const { userAddress } = req.query;
 
-  const response = await Moralis.EvmApi.utils.runContractFunction({
-    chain: "0x13881",
-    address: "Your Smart Contract",
-    functionName: "getMyName",
-    abi: ABI,
-    params: { _user: userAddress },
-  });
+    if (!userAddress) {
+      return res.status(400).json({ error: "userAddress is required" });
+    }
 
-  const jsonResponseName = response.raw;
+    if (!ethers.isAddress(userAddress)) {
+      return res.status(400).json({ error: "Invalid Ethereum address" });
+    }
 
-  const secResponse = await Moralis.EvmApi.balance.getNativeBalance({
-    chain: "0x13881",
-    address: userAddress,
-  });
+    // Call `getMyName` from the smart contract
+    const name = await contract.getMyName(userAddress);
 
-  const jsonResponseBal = (secResponse.raw.balance / 1e18).toFixed(2);
+    // Get the native token balance
+    const balance = await provider.getBalance(userAddress);
+    const balanceInEth = ethers.formatEther(balance);
 
-  const thirResponse = await Moralis.EvmApi.token.getTokenPrice({
-    address: "0x7D1AfA7B718fb893dB30A3aBc0Cfc608AaCfeBB0",
-  });
+    // Call `getMyHistory` from the smart contract
+    const history = await contract.getMyHistory(userAddress);
+    const formattedHistory = convertArrayToObjects(history);
 
-  const jsonResponseDollars = (
-    thirResponse.raw.usdPrice * jsonResponseBal
-  ).toFixed(2);
+    // Call `getMyRequests` from the smart contract
+    const requests = await contract.getMyRequests(userAddress);
 
-  const fourResponse = await Moralis.EvmApi.utils.runContractFunction({
-    chain: "0x13881",
-    address: "Your Smart Contract",
-    functionName: "getMyHistory",
-    abi: ABI,
-    params: { _user: userAddress },
-  });
+    // Prepare and send the response
+    const jsonResponse = {
+      name,
+      balance: balanceInEth,
+      history: formattedHistory,
+      requests,
+    };
 
-  const jsonResponseHistory = convertArrayToObjects(fourResponse.raw);
-
-
-  const fiveResponse = await Moralis.EvmApi.utils.runContractFunction({
-    chain: "0x13881",
-    address: "Your Smart Contract",
-    functionName: "getMyRequests",
-    abi: ABI,
-    params: { _user: userAddress },
-  });
-
-  const jsonResponseRequests = fiveResponse.raw;
-
-
-  const jsonResponse = {
-    name: jsonResponseName,
-    balance: jsonResponseBal,
-    dollars: jsonResponseDollars,
-    history: jsonResponseHistory,
-    requests: jsonResponseRequests,
-  };
-
-  return res.status(200).json(jsonResponse);
+    return res.status(200).json(jsonResponse);
+  } catch (error) {
+    console.error("Error in /getNameAndBalance:", error);
+    return res.status(500).json({ error: "Something went wrong!" });
+  }
 });
 
-
-
-Moralis.start({
-  apiKey: process.env.MORALIS_KEY,
-}).then(() => {
-  app.listen(port, () => {
-    console.log(`Listening for API Calls`);
-  });
+// Start the server
+app.listen(port, () => {
+  console.log(`Listening for API calls on port ${port}`);
 });
